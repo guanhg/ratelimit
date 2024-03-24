@@ -4,32 +4,69 @@ import (
 	"sync"
 )
 
-func FetchStorageAtomic(tp StorageType, addr string) (Atomic, error) {
-	switch tp {
-	case PROCESS_TYPE:
-		return &ProcessAtomic{}, nil
-	case REDIS_TYPE:
-		return NewRedisAtomic(addr)
-	default:
-		panic(LimiterError{"StorageType missing"})
-	}
+type AtomicType uint
+
+const (
+	PROCESS AtomicType = 0
+	REDIS   AtomicType = 1
+)
+
+type locker interface {
+	Lock() error
+	Unlock() (bool, error)
 }
 
 type Atomic interface {
-	sync.Locker
+	locker
+	storage
+	getType() AtomicType
+}
 
+func NewAtomic(at AtomicType) Atomic {
+	switch at {
+	case REDIS:
+		return &RedisAtomic{}
+	case PROCESS:
+		return &ProcessAtomic{}
+	default:
+		return nil
+	}
+}
+
+type ProcessAtomic struct {
+	ProcessLocker
+	defaultStorage
+}
+
+type ProcessLocker struct {
+	mux sync.Mutex
+}
+
+func (pl *ProcessLocker) Lock() error {
+	pl.mux.Lock()
+	return nil
+}
+
+func (pl *ProcessLocker) Unlock() (bool, error) {
+	pl.mux.Unlock()
+	return true, nil
+}
+
+func (pl *ProcessAtomic) getType() AtomicType {
+	return PROCESS
+}
+
+type storage interface {
 	Store([]byte) error
 	Restore() ([]byte, error)
 }
 
-type ProcessAtomic struct {
-	sync.Mutex
-}
+type defaultStorage struct{}
 
-func (p *ProcessAtomic) Store([]byte) error {
+func (p *defaultStorage) Store([]byte) error {
 	return nil
 }
 
-func (p *ProcessAtomic) Restore() ([]byte, error) {
+func (p *defaultStorage) Restore() ([]byte, error) {
 	return nil, nil
 }
