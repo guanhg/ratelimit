@@ -15,6 +15,7 @@ const (
 
 type Limiter interface {
 	Acquired() (time.Duration, bool, error)
+	SetRedis(string) error
 	getStorage() storage
 }
 

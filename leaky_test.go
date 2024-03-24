@@ -26,6 +26,5 @@ func TestLeakyLimit(t *testing.T) {
 			t.Errorf("Wait: %2f - [%d]", wait.Seconds(), i)
 		}
 		// time.Sleep(lt.PerRequest)
-
 	}
 }

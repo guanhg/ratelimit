@@ -69,5 +69,5 @@ func main() {
 
 ``` shell
 # test
-for ((i=1;i<100;i++)) do echo "$i: $(curl -s http://localhost:8080/ping) \n----"; sleep 0.05 done;
+for ((i=1;i<100;i++)) do echo "$i: $(curl -s http://localhost:8080/ping) \n----"; sleep 0.05; done;
 ```
