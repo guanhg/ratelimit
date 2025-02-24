@@ -2,29 +2,19 @@ package ratelimite
 
 import (
 	"testing"
+	"time"
 )
 
 func TestLeakyLimit(t *testing.T) {
-	b := &base{
-		name:         "testLimit",
-		clock:        realClock{},
-		_type:        Leaky,
-		maxPerMinute: 100,
-		mux:          NewAtomic(PROCESS),
-	}
-
 	// leaky限流无法应对突发流量，
-	// 请求的时间间隔要大于PerRequest (maxPerMinute/time.Minute)
-	// wait等待时间最大为PerRequest
-	lt := newLeaky(b)
-	for i := 0; i < 60; i++ {
-		wait, b, err := lt.Acquired()
-		if err != nil {
-			t.Error(err.Error())
-		}
+	// 请求的时间间隔要大于PerRate (thresholdInMs/threshold)
+	// wait等待时间最大为PerRate
+	lt := NewLeakyLimiter(100)
+	for i := 0; i < 110; i++ {
+		wait, b := lt.Take()
 		if !b {
-			t.Errorf("Wait: %2f - [%d]", wait.Seconds(), i)
+			t.Errorf("Wait: %d - [%d]", wait.Milliseconds(), i)
 		}
-		// time.Sleep(lt.PerRequest)
+		time.Sleep(time.Duration(lt.PerRate() * float64(time.Millisecond)))
 	}
 }

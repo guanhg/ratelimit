@@ -1,90 +1,63 @@
 package ratelimite
 
 import (
-	"encoding/json"
+	"sync"
 	"time"
 )
 
-type LimiterType string
+type Type string
 
 const (
-	Counter LimiterType = "Count"
-	Leaky   LimiterType = "Leaky"
-	Token   LimiterType = "Token"
+	Count Type = "Count"
+	Leaky Type = "Leaky"
+	Token Type = "Token"
 )
 
 type Limiter interface {
-	Acquired() (time.Duration, bool, error)
-	SetRedis(string) error
-	getStorage() storage
+	Take() (time.Duration, bool)
+	Wait()
+	WaitMax(maxDuration time.Duration)
+	Type() Type
+}
+
+func init() {
+	currClock = NewRealClock()
 }
 
 type base struct {
-	name  string      `json:"-"`
-	clock Clock       `json:"-"`
-	_type LimiterType `json:"-"`
-	mux   Atomic      `json:"-"`
+	mux sync.Mutex
 
-	maxPerMinute int64 // 每分钟最大请求数
-	// smooth option
-	ins   int `json:"-"` // used to smoothing in CounterLimiter
-	slack int `json:"-"` // used to smoothing in LeakyLimiter
+	threshold     int   // 阈值
+	thresholdInMs int64 // 阈值的时间跨度，单位毫秒，默认1000
+	bucketNum     int   // 用于计数限流器，bucket数量，默认10
+	slack         int   `json:"slack"` // 用于漏桶限流，默认5
 }
 
-func NewLimiter(name string, t LimiterType, maxPerMinute int64, opts ...Option) Limiter {
+func newBase(threshold int, opts ...Option) *base {
 	bl := &base{
-		name:         name,
-		clock:        realClock{},
-		_type:        t,
-		maxPerMinute: maxPerMinute,
-		mux:          NewAtomic(PROCESS),
+		threshold:     threshold,
+		thresholdInMs: 1000,
+		bucketNum:     10,
+		slack:         5,
 	}
 	for _, opt := range opts {
 		opt(bl)
 	}
 
-	switch t {
-	case Leaky:
-		return newLeaky(bl)
-	case Token:
-		return newToken(bl)
-	}
-
-	return nil
+	return bl
 }
 
-func (bl *base) SetRedis(redisAddr string) error {
-	mux := NewAtomic(REDIS).(*RedisAtomic)
-	if err := mux.SetAddr(redisAddr); err != nil {
-		return err
-	}
-	mux.SetKey(bl.name)
-	bl.mux = mux
-	return nil
-}
-
-func (bl *base) SetProcess() {
-	bl.mux = NewAtomic(PROCESS).(*ProcessAtomic)
-}
-
-func (bl *base) getStorage() storage {
-	return bl.mux.(storage)
-}
-
-func (bl *base) Wait(d time.Duration) {
-	bl.clock.Wait(d)
-}
-
-func (bl *base) WaitMax(d time.Duration, md time.Duration) {
-	bl.clock.MaxWait(d, md)
+// 每个请求的平均时间(单位毫秒)
+func (b *base) PerRate() float64 {
+	return float64(b.thresholdInMs) / float64(b.threshold)
 }
 
 type Option func(*base)
 
 // 用于计数限流器, 为了平滑, 把限流器的单位时间分成ins间隔
-func WithIns(ins int) Option {
+func WithBucketlNum(num int) Option {
 	return func(bl *base) {
-		bl.ins = ins
+		bl.bucketNum = num
 	}
 }
 
@@ -95,42 +68,39 @@ func WithSlack(slack int) Option {
 	}
 }
 
-func ToRedisBytes(l Limiter) error {
-	data, err := json.Marshal(l)
-	if err != nil {
-		return err
-	}
-	return l.getStorage().Store(data)
-}
-
-func FromRedisBytes(l Limiter) error {
-	data, err := l.getStorage().Restore()
-	if err != nil {
-		return err
-	}
-	if len(data) == 0 {
-		return nil
-	}
-	return json.Unmarshal(data, l)
-}
-
 type Clock interface {
 	Now() time.Time
+	CurrentTimeMillis() uint64
+	CurrentTimeNano() uint64
 	Wait(time.Duration)
 	MaxWait(d time.Duration, md time.Duration)
 }
 
+var currClock *realClock
+
 type realClock struct{}
 
-func (realClock) Now() time.Time {
+func NewRealClock() *realClock {
+	return &realClock{}
+}
+
+func (c *realClock) Now() time.Time {
 	return time.Now()
 }
 
-func (realClock) Wait(d time.Duration) {
+func (t *realClock) CurrentTimeMillis() int64 {
+	return time.Now().UnixNano() / int64(time.Millisecond)
+}
+
+func (t *realClock) CurrentTimeNano() int64 {
+	return t.Now().UnixNano()
+}
+
+func (c *realClock) Wait(d time.Duration) {
 	time.Sleep(d)
 }
 
-func (c realClock) MaxWait(d time.Duration, md time.Duration) {
+func (c *realClock) WaitMax(d time.Duration, md time.Duration) {
 	if d > md {
 		c.Wait(md)
 	} else {

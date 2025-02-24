@@ -1,79 +1,79 @@
 package ratelimite
 
 import (
-	"fmt"
 	"time"
 )
+
+var _ Limiter = (*TokenLimiter)(nil)
 
 // 令牌桶限流
 // ref https://github.com/juju/ratelimit/blob/f60b32039441cd828005f82f3a54aafd00bc9882/ratelimit.go#L305
 type TokenLimiter struct {
-	base
-	// 可用token数
-	Available int64
-	// 最近填充token的时间
-	Lastest time.Time
+	*base
+
+	Available int64 // 可用token数
+	Lastest   int64 // 最近填充token的时间
 }
 
-func newToken(bl *base) *TokenLimiter {
-	l := &TokenLimiter{
-		base:      *bl,
-		Available: bl.maxPerMinute,
+func NewTokenLimiter(threshold int, opts ...Option) *TokenLimiter {
+	t := &TokenLimiter{
+		base: newBase(threshold, opts...),
 	}
+	t.Available = int64(t.threshold)
 
-	return l
+	return t
 }
 
-func (t *TokenLimiter) Acquired() (time.Duration, bool, error) {
-	return t.AcquiredN(1)
+func (t *TokenLimiter) Type() Type {
+	return Token
 }
 
-func (t *TokenLimiter) AcquiredN(n int64) (time.Duration, bool, error) {
-	lc := 0
-trylock: // 尝试3次获取锁，每次间隔1s
-	if err := t.mux.Lock(); err != nil {
-		if lc < 3 {
-			lc++
-			time.Sleep(time.Second)
-			goto trylock
-		}
-		// t.mux.Unlock()
-		return 0, false, fmt.Errorf("Lock Fail")
+func (t *TokenLimiter) Wait() {
+	if d, b := t.Take(); !b {
+		currClock.Wait(d)
 	}
+}
+
+func (t *TokenLimiter) WaitMax(max time.Duration) {
+	if d, b := t.Take(); !b {
+		currClock.WaitMax(d, max)
+	}
+}
+
+func (t *TokenLimiter) Take() (time.Duration, bool) {
+	return t.TakeN(1)
+}
+
+func (t *TokenLimiter) TakeN(n int64) (time.Duration, bool) {
+	t.mux.Lock()
 	defer t.mux.Unlock()
 
-	if t.mux.getType() == REDIS {
-		if err := FromRedisBytes(t); err != nil {
-			return 0, false, fmt.Errorf("FromRedisBytes error")
-		}
-		defer ToRedisBytes(t)
-	}
-
-	now := t.clock.Now()
+	now := currClock.CurrentTimeMillis()
 	t.adjustAvailabe(now)
 	t.Available -= n
 	if t.Available >= 0 {
-		return 0, true, nil
+		return 0, true
 	}
 
-	waitTime := time.Duration(float64(1-t.Available) * float64(time.Minute) / float64(t.maxPerMinute))
-	return waitTime, false, nil
+	// 等待时间=令牌数*单个令牌时间，注意，这里的令牌数位负值
+	waitMs := (1 - t.Available) * int64(t.PerRate())
+	return time.Duration(waitMs * int64(time.Millisecond)), false
 }
 
-func (t *TokenLimiter) adjustAvailabe(now time.Time) {
+func (t *TokenLimiter) adjustAvailabe(now int64) {
 	// 第一次请求
-	if t.Lastest.IsZero() {
+	if t.Lastest == 0 {
 		t.Lastest = now
 		return
 	}
-	incr := int64(time.Duration(t.maxPerMinute) * now.Sub(t.Lastest) / time.Minute)
-	if t.Available >= t.maxPerMinute {
+	incr := int64(float64(now-t.Lastest) / t.PerRate())
+	if t.Available >= int64(t.threshold) {
 		return
 	}
 
 	t.Available += incr
-	if t.Available > t.maxPerMinute {
-		t.Available = t.maxPerMinute
+	if t.Available > int64(t.threshold) {
+		t.Available = int64(t.threshold)
 	}
 
 	t.Lastest = now
