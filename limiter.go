@@ -54,6 +54,12 @@ func (b *base) PerRate() float64 {
 
 type Option func(*base)
 
+func WithThresholdInMs(ms int64) Option {
+	return func(bl *base) {
+		bl.thresholdInMs = ms
+	}
+}
+
 // 用于计数限流器, 为了平滑, 把限流器的单位时间分成ins间隔
 func WithBucketlNum(num int) Option {
 	return func(bl *base) {
